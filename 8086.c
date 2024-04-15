@@ -13,9 +13,6 @@ typedef struct {
 typedef struct {
     uint16_t pc;                // Program counter
     uint8_t *memory;
-    char *source;
-    char *dest;
-    
 } chip_t;
 
 
@@ -37,12 +34,15 @@ void disassemble(chip_t *chip, char *filename) {
     rewind(file);
 
     chip->memory = malloc(filesize);
+    if (chip->memory == NULL) {
+        printf("Unable to allocate memory.\n");
+        exit(EXIT_FAILURE);
+    }
 
     fread(chip->memory, 1, filesize, file);
     fclose(file);
 
     while (chip->pc < filesize) {
-        // Combine buffer[pc] + buffer[pc+1]
         opcode.opcode = (chip->memory[chip->pc] << 8) | chip->memory[chip->pc + 1];
         chip->pc += 2;
 
@@ -58,7 +58,6 @@ void disassemble(chip_t *chip, char *filename) {
             }
         }
     }
-
     free(chip->memory);
 }
 
@@ -70,6 +69,5 @@ int main (int argc, char **argv) {
     } else {
         printf("No arguments provided. Enter the filename.\n");
     }
-
-        return 0;
+    return 0;
 }
