@@ -3,19 +3,29 @@
 #include <stdlib.h>
 
 typedef struct {
-    uint16_t pc;
     uint16_t opcode;
-    uint8_t *buffer;
     uint8_t d_bit : 1;
     uint8_t w_bit: 1;
     uint8_t reg: 3;
     uint8_t rm: 3;
+} opcode_t;
+
+typedef struct {
+    uint16_t pc;                // Program counter
+    uint8_t *memory;
     char *source;
     char *dest;
     
 } chip_t;
 
+
 void disassemble(chip_t *chip, char *filename) {
+
+    char *w_true[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
+    char *w_false[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
+
+    opcode_t opcode = {0};
+
     FILE *file = fopen(filename, "rb");
     if (file == NULL) {
         printf("Unable to open file\n");
@@ -26,81 +36,30 @@ void disassemble(chip_t *chip, char *filename) {
     int filesize = ftell(file);
     rewind(file);
 
-    chip->buffer = malloc(filesize);
+    chip->memory = malloc(filesize);
 
-    fread(chip->buffer, 1, filesize, file);
+    fread(chip->memory, 1, filesize, file);
     fclose(file);
 
     while (chip->pc < filesize) {
         // Combine buffer[pc] + buffer[pc+1]
-        chip->opcode = (chip->buffer[chip->pc] << 8) | chip->buffer[chip->pc + 1];
+        opcode.opcode = (chip->memory[chip->pc] << 8) | chip->memory[chip->pc + 1];
         chip->pc += 2;
 
-        if ((chip->opcode >> 10) == 0b100010) {
-            chip->d_bit = (chip->opcode >> 9) & 0x01; 
-            chip->rm = (chip->opcode & 0x07);
-            chip->reg = (chip->opcode & 0x38) >> 3;
-            chip->w_bit = (chip->opcode >> 8) & 0x01;
+        if ((opcode.opcode >> 10) == 0b100010) {
+            opcode.d_bit = (opcode.opcode >> 9) & 0x01;
+            opcode.rm = (opcode.opcode & 0x07);
+            opcode.reg = (opcode.opcode & 0x38) >> 3;
+            opcode.w_bit = (opcode.opcode >> 8) & 0x01;
 
-            // printf("Opcode %06b, Dbit: %b, Wbit: %b, RegBits: %03b, R/M: %03b\n", chip->opcode, chip->d_bit, chip->w_bit, chip->reg, chip->rm);
-
-            if (chip->d_bit == 0 && chip->w_bit == 1) {
-
-                switch (chip->rm) {
-                    case 0b000: chip->dest = "ax"; break;
-                    case 0b001: chip->dest = "cx"; break;
-                    case 0b010: chip->dest = "dx"; break;
-                    case 0b011: chip->dest = "bx"; break;
-                    case 0b100: chip->dest = "sp"; break;
-                    case 0b101: chip->dest = "bp"; break;
-                    case 0b110: chip->dest = "si"; break;
-                    case 0b111: chip->dest = "di"; break;
-                    default: break;
-                }
-
-                switch (chip->reg) {
-                    case 0b000: chip->source = "ax"; break;
-                    case 0b001: chip->source = "cx"; break;
-                    case 0b010: chip->source = "dx"; break;
-                    case 0b011: chip->source = "bx"; break;
-                    case 0b100: chip->source = "sp"; break;
-                    case 0b101: chip->source = "bp"; break;
-                    case 0b110: chip->source = "si"; break;
-                    case 0b111: chip->source = "di"; break;
-                    default: break;
-                }
-
-            } else if (!chip->d_bit && !chip->w_bit) {
-
-                switch (chip->reg) {
-                    case 0b000: chip->source = "al"; break;
-                    case 0b001: chip->source = "cl"; break;
-                    case 0b010: chip->source = "dl"; break;
-                    case 0b011: chip->source = "bl"; break;
-                    case 0b100: chip->source = "ah"; break;
-                    case 0b101: chip->source = "ch"; break;
-                    case 0b110: chip->source = "dh"; break;
-                    case 0b111: chip->source = "bh"; break;
-                    default: break;
-                }
-
-                switch (chip->rm) {
-                    case 0b000: chip->dest = "al"; break;
-                    case 0b001: chip->dest = "cl"; break;
-                    case 0b010: chip->dest = "dl"; break;
-                    case 0b011: chip->dest = "bl"; break;
-                    case 0b100: chip->dest = "ah"; break;
-                    case 0b101: chip->dest = "ch"; break;
-                    case 0b110: chip->dest = "dh"; break;
-                    case 0b111: chip->dest = "bh"; break;
-                    default: break;
-                }
+            switch (opcode.w_bit) {
+                case 0: printf("mov %s, %s\n", w_false[opcode.rm], w_false[opcode.reg]); break;
+                case 1: printf("mov %s, %s\n", w_true[opcode.rm], w_true[opcode.reg]); break;
             }
-            printf("mov %s, %s\n", chip->dest, chip->source);
         }
     }
 
-    free(chip->buffer);
+    free(chip->memory);
 }
 
 int main (int argc, char **argv) {
@@ -112,5 +71,5 @@ int main (int argc, char **argv) {
         printf("No arguments provided. Enter the filename.\n");
     }
 
-    return 0;
+        return 0;
 }
