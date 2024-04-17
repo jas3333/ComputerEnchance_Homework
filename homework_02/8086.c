@@ -12,7 +12,8 @@ typedef struct {
     uint8_t mod_field: 2;
     int16_t displacement_16;
     int8_t displacement_8;
-    int16_t data;
+    int16_t reg_data_16;
+    int8_t reg_data_8;
 } opcode_t;
 
 typedef struct {
@@ -20,17 +21,28 @@ typedef struct {
     uint8_t *memory;
 } chip_t;
 
+// Sets w_bit, reg, mod_field, r/m register, and d_bit
+void setbits_register_to_memory(opcode_t *opcode) {
+    opcode->w_bit = (opcode->opcode >> 8) & 0x01;
+    opcode->reg = (opcode->opcode & 0x38) >> 3;
+    opcode->mod_field = (opcode->opcode >> 6) & 0x3;
+    opcode->rm = (opcode->opcode & 0x07);
+    opcode->d_bit = (opcode->opcode >> 9) & 0x01;
+}
+
+// Sets w_bit and reg bit
+void set_immediate_to_register_bits(opcode_t *opcode) {
+    opcode->w_bit = (opcode->opcode >> 11) & 0x01;
+    opcode->reg = (opcode->opcode >> 8) & 0x07;
+
+}
 
 void disassemble(chip_t *chip, char *filename) {
 
-    char *w_true[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
-    char *w_false[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
+    char *rm_field[] = {"bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"};
 
-    char *mod_00[] = {"bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "direct", "bx"};
-    char *mod_01[] = {"bx + si ", "bx + di ", "bp + si ", "bp + di", "si", "di", "bp", "bx"};
-    char *mod_10[] = {"bx + si", "bx + di", "bp + si", "bp +_ di", "si", "di", "bp", "bx"};
-    char *mod_11_w[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};    // w_bit = 1
-    char *mod_11[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};      // w_bit = 0;
+    char *reg_w[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};    // w_bit = 1
+    char *reg[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};      // w_bit = 0;
 
     opcode_t opcode = {0};
 
@@ -56,55 +68,106 @@ void disassemble(chip_t *chip, char *filename) {
     while (chip->pc < filesize) {
         opcode.opcode = (chip->memory[chip->pc] << 8) | chip->memory[chip->pc + 1];
         chip->pc += 2;
+        /*
+            move dest, source
 
+            d_bit - 0: Source goes into reg filed, 
+                    1: Dest goes in reg field
+            w_bit - 0: Instruction operates on byte data(8 bits)
+                    1: Instruction operates on word data(16 bits)
+
+           Immediate to register - 
+           [1011WREG][data][data if w=1]
+
+        */
         if ((opcode.opcode >> 12) == 0b1011) {
-            opcode.w_bit = (opcode.opcode >> 11) & 0x01;
-            opcode.reg = (opcode.opcode >> 8) & 0x07;
-            int8_t immediate_value = opcode.opcode & 0xFF;
+            set_immediate_to_register_bits(&opcode);
+            switch (opcode.w_bit) {
+                case 0: 
+                    opcode.reg_data_8 = opcode.opcode & 0xFF;                   // Get last 8 bits from instruction
+                    printf("mov %s, %d\n", reg[opcode.reg], opcode.reg_data_8);
+                    break;
+                case 1:
+                    opcode.reg_data_16 = (chip->memory[chip->pc] << 8) | (opcode.opcode & 0xFF); 
+                    printf("mov %s, %d\n", reg_w[opcode.reg], opcode.reg_data_16);
+                    chip->pc++;
+                    break;
+                default: break;
+            }
+        }
 
-            if (opcode.w_bit == 0) {
-                printf("mov %s, %d\n", w_false[opcode.reg], immediate_value);
-            } else if (opcode.w_bit == 1) {
-                opcode.data = ((chip->memory[chip->pc]) << 8) | (opcode.opcode & 0xFF);
-                printf("mov %s, %d\n", w_true[opcode.reg], opcode.data);
-                chip->pc += 1;
-            } 
-        } else if ((opcode.opcode >> 10) == 0b100010) {
-            opcode.w_bit = (opcode.opcode >> 8) & 0x01;
-            opcode.reg = (opcode.opcode & 0x38) >> 3;
-            opcode.mod_field = (opcode.opcode >> 6) & 0x3;
-            opcode.rm = (opcode.opcode & 0x07);
-            opcode.d_bit = (opcode.opcode >> 9) & 0x01;
+        /*
+         Register/memory to/from register
 
-            if (opcode.mod_field == 0b00) {
+         A lot of checks on this one spaghetti incoming. Need to check d_bit as well as w_bit.
 
-                if (opcode.rm == 0b110) {
-                    opcode.displacement_16 = (chip->memory[chip->pc+1] << 8) | chip->memory[chip->pc];
-                    printf("Unimplemented: %b\n", opcode.displacement_16);
-                    chip->pc += 2;
+         d_bit - determines source/dest reg
+         w_bit - determines width of data, 8bit/16bit
 
-                } else {
-                    printf("mov [%s]\n", mod_00[opcode.rm]);
-                }
-            } else if (opcode.mod_field == 0b01) {
+        */
+        else if ((opcode.opcode >> 10) == 0b100010) {
+            setbits_register_to_memory(&opcode);
+        /*
+           Check modfield:
+            00: Memory Mode, no displacement, unless R/M == 110 then 16 bit displament follows
+            01: Memory Mode, 8bit displacement follows
+            10: Memory Mode, 16 bit displacement follows 
+            11: Register Mode, no displacement
+
+           d_bit = 0 [100010dw][mod r/m reg][DISP-LO][DISP-HI]
+           d_bit = 1 [100010dw][mod reg r/m][DISP-LO][DISP-HI]
+
+        */
+            switch (opcode.mod_field) {
+                case 0b00: 
+                    // TODO: check if R/M == 110
+                    if (opcode.rm == 0b110) {
+                        chip->pc += 2;
+                    }
+                    else if (opcode.d_bit == 0 && opcode.w_bit == 0) printf("mov [%s], %s\n", rm_field[opcode.rm], reg[opcode.reg]);
+                    else if (opcode.d_bit && opcode.w_bit == 0) printf("mov %s, [%s]\n", reg[opcode.reg], rm_field[opcode.rm]);
+                    else if (opcode.d_bit == 0 && opcode.w_bit == 1) printf("mov [%s], %s\n", rm_field[opcode.rm], reg_w[opcode.reg]);
+                    else if (opcode.d_bit && opcode.w_bit == 1) printf("mov %s, [%s]\n", reg_w[opcode.reg], rm_field[opcode.rm]);
+                    break;
+                case 0b01: 
                     opcode.displacement_8 = chip->memory[chip->pc];
-                    printf("mov [%s + %d]\n", mod_01[opcode.rm], opcode.displacement_8);
+                    
+                    if (opcode.d_bit == 0) {
+                        if (opcode.displacement_8 == 0) {
+                            printf("mov [%s], %s\n", rm_field[opcode.rm], reg[opcode.reg]);
+                        } else {
+                            printf("mov [%s + %d], %s\n", rm_field[opcode.rm], opcode.displacement_8, reg[opcode.reg]);
+                        }
+                    } else if (opcode.d_bit) {
+                        if (opcode.displacement_8 == 0) {
+                            printf("mov %s, [%s]\n", reg_w[opcode.reg], rm_field[opcode.rm]);
+                        } else {
+                            printf("mov %s, [%s + %d]\n", reg_w[opcode.reg], rm_field[opcode.rm], opcode.displacement_8);
+                        }
+                    } 
                     chip->pc += 1;
-            } else if (opcode.mod_field == 0b10) {
-                    opcode.displacement_16 = (chip->memory[chip->pc+1] << 8) | chip->memory[chip->pc];
-                    printf("mov %s, [%s + %d]\n", mod_11[opcode.reg], mod_10[opcode.rm] ,opcode.displacement_16);
-                    chip->pc += 2;
-            } else if (opcode.mod_field == 0b11) {
-                if (opcode.w_bit == 0) {
-                    printf("mov %s, %s\n", mod_11[opcode.rm], mod_11[opcode.reg]);
-                } else {
-                    printf("mov %s, %s\n", mod_11_w[opcode.rm], mod_11_w[opcode.reg]);
-                }
-            } 
-        } 
-    }
-    // printf("\n\n");
+                    break;
+                case 0b10:
+                    opcode.displacement_16 = (chip->memory[chip->pc+1] << 8) | (chip->memory[chip->pc]);
+                    if (opcode.d_bit == 0) {
+                        printf("mov [%s + %d], %s\n", rm_field[opcode.rm], opcode.displacement_16, reg[opcode.reg]);
+                    } else {
+                        printf("mov %s, [%s + %d]\n", reg[opcode.reg], rm_field[opcode.rm], opcode.displacement_16);
+                    }
+                    chip->pc+=2;
+                    break;
+                case 0b11: 
+                    if (opcode.w_bit == 0) {
+                        printf("mov %s, %s\n", reg[opcode.rm], reg[opcode.reg]);
+                    } else if (opcode.w_bit) {
+                        printf("mov %s, %s\n", reg_w[opcode.rm], reg_w[opcode.reg]);
+                    } 
+                    break;
 
+                default: break;
+            }
+        }
+    }
     free(chip->memory);
 }
 
